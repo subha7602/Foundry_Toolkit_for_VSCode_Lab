@@ -62,6 +62,30 @@ See the full learning path in:
 
 ---
 
+## ⚡ Running Multi-Agent with Groq (Fast / Workshop Mode)
+
+To run this complete 4-agent sequential workflow with **Groq** (`llama-3.3-70b-versatile`):
+
+```bash
+cd workshop/lab02-multi-agent/PersonalCareerCopilot
+
+# 1. Setup virtual environment
+python -m venv .venv
+source .venv/bin/activate   # On Windows: .\.venv\Scripts\Activate.ps1
+
+# 2. Configure .env
+cp .env.example .env
+# Edit .env and set GROQ_API_KEY=gsk_...
+
+# 3. Install requirements
+pip install -r requirements.txt
+
+# 4. Run the 4-agent pipeline
+python groq_main.py
+```
+
+---
+
 ## Orchestration patterns
 
 Lab 02 includes the default **fan-out → fan-in → sequential** flow, and the docs also describe alternative orchestration patterns for experimentation.
@@ -75,3 +99,4 @@ See [docs/04-orchestration-patterns.md](docs/04-orchestration-patterns.md).
 ---
 
 **Previous:** [Lab 01 - Single Agent](../lab01-single-agent/README.md) · **Back to:** [Workshop Home](../../README.md)
+

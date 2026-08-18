@@ -105,13 +105,18 @@ Certifications: Azure Solutions Architect Expert preferred.
 ```
 PersonalCareerCopilot/
 ├── .env                ← Your credentials (git-ignored)
+├── .env.example        ← Environment template for Groq and Foundry
 ├── agent.yaml          ← Hosted agent definition (name, resources, env vars)
 ├── Dockerfile          ← Container image for Foundry deployment
-├── main.py             ← 4-agent workflow (instructions, MCP tool, WorkflowBuilder)
-└── requirements.txt    ← Python dependencies
+├── groq_main.py        ← Groq 4-agent pipeline runner (ultra-fast, interactive)
+├── main.py             ← Foundry 4-agent workflow (instructions, MCP tool, WorkflowBuilder)
+└── requirements.txt    ← Python dependencies (groq, agent-framework, mcp)
 ```
 
 ## Key files
+
+### `groq_main.py`
+Standalone, ultra-fast 4-agent sequential workflow powered by Groq (`llama-3.3-70b-versatile`) with tool-calling for learning resource recommendations. Run with: `python groq_main.py`.
 
 ### `agent.yaml`
 
@@ -133,10 +138,13 @@ Contains:
 
 | Package | Purpose |
 |---------|----------|
+| `groq` | Groq Python SDK for fast cloud LLM inference & tool calling |
+| `python-dotenv` | Loads `.env` configuration |
 | `agent-framework-foundry` | Core runtime: `Agent`, `AgentExecutor`, `WorkflowBuilder`, `@tool`, `FoundryChatClient` |
 | `agent-framework-foundry-hosting` | `ResponsesHostServer` + Foundry hosting integration |
 | `mcp<2,>=1.24.0` | MCP client for GapAnalyzer (`streamable_http_client`) |
 | `debugpy` | Python debugging (F5 in VS Code) |
+
 
 ---
 

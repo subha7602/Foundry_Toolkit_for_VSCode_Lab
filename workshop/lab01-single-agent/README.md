@@ -230,13 +230,35 @@ Key solution files:
 
 | File | Description |
 |------|-------------|
-| [`agent/main.py`](agent/main.py) | Agent entry point with executive summary instructions and `get_current_date` tool |
+| [`agent/main.py`](agent/main.py) | Agent entry point for Microsoft Foundry with executive summary instructions and `get_current_date` tool |
+| [`agent/groq_main.py`](agent/groq_main.py) | Standalone, ultra-fast Groq Single Agent runner with tool calling and interactive CLI |
 | [`agent/agent.yaml`](agent/agent.yaml) | Agent definition (`kind: hosted`, protocols, env vars, resources) |
 | [`agent/Dockerfile`](agent/Dockerfile) | Container image for deployment (Python slim base image, port `8088`) |
-| [`agent/requirements.txt`](agent/requirements.txt) | Python dependencies (`agent-framework-foundry`, `agent-framework-foundry-hosting`, `mcp`, `debugpy`) |
+| [`agent/requirements.txt`](agent/requirements.txt) | Python dependencies (`groq`, `python-dotenv`, `agent-framework-foundry`, `debugpy`) |
+
+---
+
+## ⚡ Running with Groq (Fast / Workshop Mode)
+
+If you are running this lab using Groq:
+
+1. Copy `.env.example` to `.env`:
+   ```bash
+   cp agent/.env.example agent/.env
+   ```
+2. Add your `GROQ_API_KEY` (get one for free at [console.groq.com](https://console.groq.com/keys)).
+3. Install dependencies:
+   ```bash
+   pip install -r agent/requirements.txt
+   ```
+4. Run the Groq agent:
+   ```bash
+   python agent/groq_main.py
+   ```
 
 ---
 
 ## Next steps
 
 - [Lab 02 - Multi-Agent Workflow →](../lab02-multi-agent/README.md)
+
