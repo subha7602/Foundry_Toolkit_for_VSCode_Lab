@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft & Workshop Contributors. All rights reserved.
 """
 Explain Like I'm an Executive Agent - Powered by OpenRouter.
-Single Agent Lab: Access 200+ models with a single OpenRouter key and tool calling.
+Self-contained runner compatible with VS Code Agent Inspector and CLI.
 """
 
 import json
@@ -9,16 +9,18 @@ import logging
 import os
 import sys
 from datetime import date
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from dotenv import load_dotenv
 from openai import OpenAI
 
-# Load environment variables from .env file
 load_dotenv(override=True)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("openrouter-single-agent")
+logger = logging.getLogger("openrouter-agent")
 
-# --- System Instructions ---
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct")
+
 EXECUTIVE_AGENT_INSTRUCTIONS = """You are an "Explain Like I'm an Executive" agent.
 
 Purpose:
@@ -30,8 +32,8 @@ Senior leaders who care about impact, risk, and what happens next.
 
 What you must do:
 - Rephrase input for a non-technical audience
-- Prioritize clarity, brevity, and outcomes over technical jargon
-- Remove logs, metrics, stack traces, and low-level root-cause details
+- Prioritize clarity, brevity, and outcomes over technical accuracy
+- Remove jargon, logs, metrics, stack traces, and root-cause details
 - Translate technical causes into simple cause-and-effect statements
 - Explicitly call out business impact
 - Always include a clear next step or action
@@ -60,11 +62,7 @@ TOOLS = [
         "function": {
             "name": "get_current_date",
             "description": "Returns the current date in YYYY-MM-DD format.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
+            "parameters": {"type": "object", "properties": {}, "required": []},
         },
     }
 ]
@@ -74,113 +72,100 @@ def get_current_date() -> str:
     return str(date.today())
 
 
-TOOL_MAP = {
-    "get_current_date": get_current_date,
-}
-
-
-def create_openrouter_client() -> tuple[OpenAI, str]:
-    """Initializes the standard OpenAI client configured for OpenRouter."""
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        print("\n❌ ERROR: Missing OPENROUTER_API_KEY in .env file.")
-        print("👉 Get your OpenRouter API key at: https://openrouter.ai/keys\n")
-        sys.exit(1)
-
-    model = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct")
+def run_agent(user_input: str) -> str:
+    if not OPENROUTER_API_KEY:
+        return "Error: OPENROUTER_API_KEY is not set in your .env file."
 
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
-        api_key=api_key,
+        api_key=OPENROUTER_API_KEY,
         default_headers={
             "HTTP-Referer": "https://github.com/microsoft-foundry/workshop",
             "X-Title": "AI Agents Workshop",
         },
     )
-    return client, model
-
-
-def run_agent(user_input: str) -> str:
-    """Executes the single agent workflow with OpenRouter."""
-    client, model = create_openrouter_client()
-
     messages = [
         {"role": "system", "content": EXECUTIVE_AGENT_INSTRUCTIONS},
         {"role": "user", "content": user_input},
     ]
 
-    logger.info(f"Sending prompt to OpenRouter model: {model}")
+    try:
+        response = client.chat.completions.create(
+            model=OPENROUTER_MODEL,
+            messages=messages,
+            tools=TOOLS,
+            tool_choice="auto",
+        )
+    except Exception as e:
+        return f"Error calling OpenRouter: {e}"
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        tools=TOOLS,
-        tool_choice="auto",
-    )
+    msg = response.choices[0].message
+    if msg.tool_calls:
+        messages.append(msg)
+        for tc in msg.tool_calls:
+            if tc.function.name == "get_current_date":
+                messages.append({"role": "tool", "tool_call_id": tc.id, "content": get_current_date()})
 
-    response_message = response.choices[0].message
+        final_resp = client.chat.completions.create(model=OPENROUTER_MODEL, messages=messages)
+        return final_resp.choices[0].message.content or ""
 
-    if response_message.tool_calls:
-        messages.append(response_message)
-        for tool_call in response_message.tool_calls:
-            function_name = tool_call.function.name
-            logger.info(f"Tool called by OpenRouter agent: {function_name}")
-            tool_func = TOOL_MAP.get(function_name)
-            tool_result = tool_func() if tool_func else json.dumps({"error": f"Tool {function_name} not found"})
+    return msg.content or ""
 
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "content": str(tool_result),
+
+def start_server(host="127.0.0.1", port=8088):
+    class Handler(BaseHTTPRequestHandler):
+        def _send_json(self, data, status=200):
+            payload = json.dumps(data).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def do_GET(self):
+            self._send_json({"status": "healthy", "agent": "ExecutiveSummaryAgent", "model": OPENROUTER_MODEL})
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                data = json.loads(body) if body else {}
+                prompt = data.get("input") or data.get("message") or body
+                if isinstance(prompt, list):
+                    prompt = " ".join([p.get("text", "") if isinstance(p, dict) else str(p) for p in prompt])
+            except Exception:
+                prompt = body
+
+            logger.info(f"Processing prompt with OpenRouter ({OPENROUTER_MODEL}): {prompt[:60]}...")
+            output = run_agent(prompt)
+
+            self._send_json({
+                "status": "completed",
+                "response": output,
+                "output": [{"type": "message", "role": "assistant", "content": [{"type": "text", "text": output}]}],
             })
 
-        final_response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-        )
-        return final_response.choices[0].message.content or ""
+        def log_message(self, format, *args):
+            pass
 
-    return response_message.content or "No response generated."
-
-
-def main():
     print("=" * 70)
-    print(" 🌐 Lab 01 - OpenRouter Single Agent: Executive Incident Summarizer")
-    print("=" * 70)
+    print(f"OpenRouter Agent Server running on http://{host}:{port}")
+    print(f"Model: {OPENROUTER_MODEL}")
+    print("Compatible with VS Code Command: Foundry Toolkit: Open Agent Inspector")
+    print("=" * 70 + "\n")
 
-    client, model = create_openrouter_client()
-    print(f"✅ Connected to OpenRouter Gateway (https://openrouter.ai/api/v1)")
-    print(f"✅ Target Model: {model}\n")
-
-    sample_incident = (
-        "The API latency increased from 200ms to 2s after deploying v3.2 at 09:30 UTC. "
-        "Root cause: thread pool starvation from unindexed synchronous queries in /orders endpoint. "
-        "Rolled back to v3.1 at 10:14 UTC. Latency returned to 190ms."
-    )
-
-    print("--- [Test Prompt: Technical Incident] ---")
-    print(sample_incident)
-    print("\n--- [Agent Output via OpenRouter] ---")
-    output = run_agent(sample_incident)
-    print(output)
-    print("\n" + "=" * 70)
-
-    print("\n💡 Type your own incident update (or 'exit' to quit):")
-    while True:
-        try:
-            user_input = input("\n📝 Enter incident > ").strip()
-            if not user_input or user_input.lower() in ["exit", "quit"]:
-                print("Exiting.")
-                break
-            print("\n⏳ Calling OpenRouter...")
-            res = run_agent(user_input)
-            print("\n--- Executive Summary ---")
-            print(res)
-            print("-" * 50)
-        except (KeyboardInterrupt, EOFError):
-            print("\nExiting.")
-            break
+    httpd = HTTPServer((host, port), Handler)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nServer stopped.")
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "--cli":
+        sample = "API latency increased from 200ms to 2s after deploying v3.2 at 09:30 UTC. Rolled back to v3.1 at 10:14 UTC."
+        print("\n[Test Prompt]\n", sample)
+        print("\n[Agent Output]\n", run_agent(sample))
+    else:
+        start_server()
