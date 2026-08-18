@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft & Workshop Contributors. All rights reserved.
 """
 Personal Career Copilot - Multi-Agent Workflow Powered by Groq.
-Supports VS Code Agent Inspector streaming protocol and CLI.
+Supports Text, PDF, and DOCX resumes, VS Code Agent Inspector streaming, and CLI.
 """
 
 import json
@@ -13,6 +13,16 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from dotenv import load_dotenv
 from groq import Groq
+
+try:
+    import pypdf
+except ImportError:
+    pypdf = None
+
+try:
+    import docx
+except ImportError:
+    docx = None
 
 load_dotenv(override=True)
 
@@ -153,6 +163,54 @@ TOOLS = [
 ]
 
 
+def extract_pdf_text(filepath: str) -> str:
+    """Extracts text from a local PDF resume."""
+    if not pypdf:
+        return "[PDF parsing error: pypdf library is not installed. Run 'pip install pypdf']"
+    try:
+        reader = pypdf.PdfReader(filepath)
+        pages_text = [page.extract_text() or "" for page in reader.pages]
+        return "\n".join(pages_text).strip()
+    except Exception as e:
+        logger.error(f"Failed to extract PDF {filepath}: {e}")
+        return f"[Error reading PDF {filepath}: {e}]"
+
+
+def extract_docx_text(filepath: str) -> str:
+    """Extracts text from a local Word DOCX resume."""
+    if not docx:
+        return "[DOCX parsing error: python-docx library is not installed. Run 'pip install python-docx']"
+    try:
+        doc = docx.Document(filepath)
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        return "\n".join(paragraphs).strip()
+    except Exception as e:
+        logger.error(f"Failed to extract DOCX {filepath}: {e}")
+        return f"[Error reading DOCX {filepath}: {e}]"
+
+
+def preprocess_input(user_input: str) -> str:
+    """Auto-detects PDF and DOCX file paths in user input and extracts resume content."""
+    words = user_input.split()
+    for word in words:
+        clean = word.strip("'\"><(),:;\n\r")
+        if os.path.exists(clean):
+            lower_name = clean.lower()
+            if lower_name.endswith(".pdf"):
+                logger.info(f"Extracting resume text from PDF: {clean}")
+                extracted = extract_pdf_text(clean)
+                user_input = user_input.replace(
+                    word, f"\n[RESUME EXTRACTED FROM PDF: {os.path.basename(clean)}]\n{extracted}\n"
+                )
+            elif lower_name.endswith(".docx"):
+                logger.info(f"Extracting resume text from DOCX: {clean}")
+                extracted = extract_docx_text(clean)
+                user_input = user_input.replace(
+                    word, f"\n[RESUME EXTRACTED FROM DOCX: {os.path.basename(clean)}]\n{extracted}\n"
+                )
+    return user_input
+
+
 def search_learning_resources(skill: str) -> str:
     encoded = urllib.parse.quote(skill.strip())
     return (
@@ -188,27 +246,6 @@ def execute_step(client: Groq, instructions: str, user_content: str, use_tools: 
         return final_resp.choices[0].message.content or ""
 
     return msg.content or ""
-
-
-def run_career_copilot(input_text: str) -> str:
-    if not GROQ_API_KEY:
-        return "Error: GROQ_API_KEY is not set in your .env file."
-
-    client = Groq(api_key=GROQ_API_KEY)
-
-    logger.info("[Step 1/4] Running ResumeParser on Groq...")
-    parsed_resume = execute_step(client, RESUME_PARSER_INSTRUCTIONS, input_text)
-
-    logger.info("[Step 2/4] Running JobDescriptionAgent on Groq...")
-    jd_analysis = execute_step(client, JOB_DESCRIPTION_INSTRUCTIONS, parsed_resume)
-
-    logger.info("[Step 3/4] Running MatchingAgent on Groq...")
-    matching_report = execute_step(client, MATCHING_AGENT_INSTRUCTIONS, jd_analysis)
-
-    logger.info("[Step 4/4] Running GapAnalyzer with tool-calling on Groq...")
-    final_roadmap = execute_step(client, GAP_ANALYZER_INSTRUCTIONS, matching_report, use_tools=True)
-
-    return f"=== MATCHING REPORT ===\n{matching_report}\n\n=== UPSKILLING ROADMAP ===\n{final_roadmap}"
 
 
 def start_server(host="127.0.0.1", port=8088):
@@ -253,10 +290,9 @@ def start_server(host="127.0.0.1", port=8088):
                 resp_id = data.get("response_id", f"resp_{uuid.uuid4().hex[:8]}")
                 item_id = f"item_{uuid.uuid4().hex[:8]}"
 
-                logger.info(f"Processing prompt on Groq ({GROQ_MODEL}): {str(prompt)[:60]}...")
-                output = run_career_copilot(str(prompt))
+                logger.info(f"Processing prompt with Groq ({GROQ_MODEL}): {str(prompt)[:60]}...")
 
-                # Stream complete responses protocol events to Agent Inspector
+                # Send SSE headers IMMEDIATELY
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream; charset=utf-8")
                 self.send_header("Cache-Control", "no-cache")
@@ -265,22 +301,56 @@ def start_server(host="127.0.0.1", port=8088):
                 self.send_header("Access-Control-Allow-Headers", "*")
                 self.end_headers()
 
-                events = [
-                    {"type": "response.created", "response": {"id": resp_id, "conversation_id": conv_id, "status": "in_progress"}},
-                    {"type": "response.output_item.added", "item": {"id": item_id, "type": "message", "role": "assistant", "content": []}},
-                    {"type": "response.content_part.added", "part": {"type": "text", "text": ""}},
-                    {"type": "response.text.delta", "delta": output},
-                    {"type": "response.output_item.done", "item": {"id": item_id, "type": "message", "role": "assistant", "content": [{"type": "text", "text": output}]}},
-                    {"type": "response.done", "response": {"id": resp_id, "conversation_id": conv_id, "status": "completed", "output": [{"id": item_id, "type": "message", "role": "assistant", "content": [{"type": "text", "text": output}]}]}},
-                ]
-                for ev in events:
-                    self.wfile.write(f"data: {json.dumps(ev)}\n\n".encode("utf-8"))
+                def send_event(ev_type: str, ev_data: dict):
+                    payload = {"type": ev_type, **ev_data}
+                    self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode("utf-8"))
                     self.wfile.flush()
+
+                def send_delta(text: str):
+                    send_event("response.text.delta", {"delta": text})
+
+                send_event("response.created", {"response": {"id": resp_id, "conversation_id": conv_id, "status": "in_progress"}})
+                send_event("response.output_item.added", {"item": {"id": item_id, "type": "message", "role": "assistant", "content": []}})
+                send_event("response.content_part.added", {"part": {"type": "text", "text": ""}})
+
+                if not GROQ_API_KEY:
+                    send_delta("Error: GROQ_API_KEY is not set in your .env file.")
+                else:
+                    client = Groq(api_key=GROQ_API_KEY)
+                    processed_input = preprocess_input(str(prompt))
+
+                    # Step 1: Resume Parser
+                    send_delta("Running multi-agent analysis on Groq...\n\n[Step 1/4] Parsing candidate profile...\n")
+                    parsed_resume = execute_step(client, RESUME_PARSER_INSTRUCTIONS, processed_input)
+
+                    # Step 2: Job Description Agent
+                    send_delta("[Step 2/4] Analyzing job requirements...\n")
+                    jd_analysis = execute_step(client, JOB_DESCRIPTION_INSTRUCTIONS, parsed_resume)
+
+                    # Step 3: Matching Agent
+                    send_delta("[Step 3/4] Evaluating fit score and skills gap...\n")
+                    matching_report = execute_step(client, MATCHING_AGENT_INSTRUCTIONS, jd_analysis)
+
+                    # Step 4: Gap Analyzer
+                    send_delta("[Step 4/4] Building personalized learning roadmap with resources...\n\n")
+                    final_roadmap = execute_step(client, GAP_ANALYZER_INSTRUCTIONS, matching_report, use_tools=True)
+
+                    full_output = f"=== MATCHING REPORT ===\n{matching_report}\n\n=== UPSKILLING ROADMAP ===\n{final_roadmap}"
+                    send_delta(f"\n{full_output}")
+
+                send_event("response.output_item.done", {"item": {"id": item_id, "type": "message", "role": "assistant", "content": [{"type": "text", "text": full_output if GROQ_API_KEY else "Error"}]}})
+                send_event("response.done", {"response": {"id": resp_id, "conversation_id": conv_id, "status": "completed", "output": [{"id": item_id, "type": "message", "role": "assistant", "content": [{"type": "text", "text": full_output if GROQ_API_KEY else "Error"}]}]}})
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
+
             except Exception as e:
                 logger.error(f"Error handling request: {e}")
-                self._send_json({"status": "error", "error": str(e)}, status=500)
+                try:
+                    self.wfile.write(f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n".encode("utf-8"))
+                    self.wfile.write(b"data: [DONE]\n\n")
+                    self.wfile.flush()
+                except Exception:
+                    pass
 
         def log_message(self, format, *args):
             pass
@@ -288,7 +358,7 @@ def start_server(host="127.0.0.1", port=8088):
     print("=" * 70)
     print(f"Groq Multi-Agent Server running on http://{host}:{port}")
     print(f"Model: {GROQ_MODEL}")
-    print("Compatible with VS Code Command: Foundry Toolkit: Open Agent Inspector")
+    print("Features: Text + PDF + DOCX Extraction | Live SSE Streaming")
     print("=" * 70 + "\n")
 
     httpd = HTTPServer((host, port), Handler)
@@ -301,10 +371,14 @@ def start_server(host="127.0.0.1", port=8088):
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--cli":
         sample = """
-Resume: Jane Doe, 5 years Python backend developer with AWS and PostgreSQL.
+Resume: sample_resume.docx
 Job Description: Senior AI Cloud Engineer, requires Kubernetes, Terraform, Azure AI Foundry, LLM fine-tuning.
 """
-        print("\n--- CLI Test Output ---\n")
-        print(run_career_copilot(sample))
+        client = Groq(api_key=GROQ_API_KEY)
+        r1 = execute_step(client, RESUME_PARSER_INSTRUCTIONS, preprocess_input(sample))
+        r2 = execute_step(client, JOB_DESCRIPTION_INSTRUCTIONS, r1)
+        r3 = execute_step(client, MATCHING_AGENT_INSTRUCTIONS, r2)
+        r4 = execute_step(client, GAP_ANALYZER_INSTRUCTIONS, r3, use_tools=True)
+        print(f"=== MATCHING REPORT ===\n{r3}\n\n=== UPSKILLING ROADMAP ===\n{r4}")
     else:
         start_server()

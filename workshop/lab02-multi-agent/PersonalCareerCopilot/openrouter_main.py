@@ -1,17 +1,23 @@
 # Copyright (c) Microsoft & Workshop Contributors. All rights reserved.
 """
 Personal Career Copilot - Multi-Agent Workflow Powered by OpenRouter.
-Self-contained 4-agent sequential workflow runner compatible with VS Code Agent Inspector and CLI.
+Supports PDF Resume parsing, VS Code Agent Inspector streaming, and CLI.
 """
 
 import json
 import logging
 import os
 import sys
+import uuid
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from dotenv import load_dotenv
 from openai import OpenAI
+
+try:
+    import pypdf
+except ImportError:
+    pypdf = None
 
 load_dotenv(override=True)
 
@@ -152,6 +158,33 @@ TOOLS = [
 ]
 
 
+def extract_pdf_text(filepath: str) -> str:
+    """Extracts text from a local PDF resume file."""
+    if not pypdf:
+        return "[PDF parsing error: pypdf library is not installed. Run 'pip install pypdf']"
+    try:
+        reader = pypdf.PdfReader(filepath)
+        pages_text = [page.extract_text() or "" for page in reader.pages]
+        return "\n".join(pages_text).strip()
+    except Exception as e:
+        logger.error(f"Failed to extract PDF {filepath}: {e}")
+        return f"[Error reading PDF {filepath}: {e}]"
+
+
+def preprocess_input(user_input: str) -> str:
+    """Auto-detects PDF file paths in user input and extracts resume content."""
+    words = user_input.split()
+    for word in words:
+        clean = word.strip("'\"><(),:;\n\r")
+        if clean.lower().endswith(".pdf") and os.path.exists(clean):
+            logger.info(f"Extracting resume text from PDF: {clean}")
+            extracted = extract_pdf_text(clean)
+            user_input = user_input.replace(
+                word, f"\n[RESUME EXTRACTED FROM PDF: {os.path.basename(clean)}]\n{extracted}\n"
+            )
+    return user_input
+
+
 def search_learning_resources(skill: str) -> str:
     encoded = urllib.parse.quote(skill.strip())
     return (
@@ -189,34 +222,6 @@ def execute_step(client: OpenAI, instructions: str, user_content: str, use_tools
     return msg.content or ""
 
 
-def run_career_copilot(input_text: str) -> str:
-    if not OPENROUTER_API_KEY:
-        return "Error: OPENROUTER_API_KEY is not set in your .env file."
-
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=OPENROUTER_API_KEY,
-        default_headers={
-            "HTTP-Referer": "https://github.com/microsoft-foundry/workshop",
-            "X-Title": "AI Agents Workshop",
-        },
-    )
-
-    logger.info("[Step 1/4] Running ResumeParser on OpenRouter...")
-    parsed_resume = execute_step(client, RESUME_PARSER_INSTRUCTIONS, input_text)
-
-    logger.info("[Step 2/4] Running JobDescriptionAgent on OpenRouter...")
-    jd_analysis = execute_step(client, JOB_DESCRIPTION_INSTRUCTIONS, parsed_resume)
-
-    logger.info("[Step 3/4] Running MatchingAgent on OpenRouter...")
-    matching_report = execute_step(client, MATCHING_AGENT_INSTRUCTIONS, jd_analysis)
-
-    logger.info("[Step 4/4] Running GapAnalyzer with tool-calling on OpenRouter...")
-    final_roadmap = execute_step(client, GAP_ANALYZER_INSTRUCTIONS, matching_report, use_tools=True)
-
-    return f"=== MATCHING REPORT ===\n{matching_report}\n\n=== UPSKILLING ROADMAP ===\n{final_roadmap}"
-
-
 def start_server(host="127.0.0.1", port=8088):
     class Handler(BaseHTTPRequestHandler):
         def _send_json(self, data, status=200):
@@ -225,31 +230,108 @@ def start_server(host="127.0.0.1", port=8088):
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Headers", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             self.end_headers()
             self.wfile.write(payload)
+
+        def do_OPTIONS(self):
+            self.send_response(200)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Headers", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.end_headers()
 
         def do_GET(self):
             self._send_json({"status": "healthy", "agent": "PersonalCareerCopilot", "model": OPENROUTER_MODEL})
 
         def do_POST(self):
-            length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(length).decode("utf-8") if length else ""
             try:
-                data = json.loads(body) if body else {}
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length).decode("utf-8") if length else ""
+                try:
+                    data = json.loads(body) if body else {}
+                except Exception:
+                    data = {"input": body}
+
                 prompt = data.get("input") or data.get("message") or body
                 if isinstance(prompt, list):
                     prompt = " ".join([p.get("text", "") if isinstance(p, dict) else str(p) for p in prompt])
-            except Exception:
-                prompt = body
+                elif isinstance(prompt, dict):
+                    prompt = prompt.get("text", "") or str(prompt)
 
-            logger.info(f"Processing multi-agent pipeline with OpenRouter ({OPENROUTER_MODEL})...")
-            output = run_career_copilot(prompt)
+                conv_id = data.get("conversation_id", f"conv_{uuid.uuid4().hex[:8]}")
+                resp_id = data.get("response_id", f"resp_{uuid.uuid4().hex[:8]}")
+                item_id = f"item_{uuid.uuid4().hex[:8]}"
 
-            self._send_json({
-                "status": "completed",
-                "response": output,
-                "output": [{"type": "message", "role": "assistant", "content": [{"type": "text", "text": output}]}],
-            })
+                logger.info(f"Processing prompt with OpenRouter ({OPENROUTER_MODEL}): {str(prompt)[:60]}...")
+
+                # Send SSE headers IMMEDIATELY
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "keep-alive")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Headers", "*")
+                self.end_headers()
+
+                def send_event(ev_type: str, ev_data: dict):
+                    payload = {"type": ev_type, **ev_data}
+                    self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode("utf-8"))
+                    self.wfile.flush()
+
+                def send_delta(text: str):
+                    send_event("response.text.delta", {"delta": text})
+
+                send_event("response.created", {"response": {"id": resp_id, "conversation_id": conv_id, "status": "in_progress"}})
+                send_event("response.output_item.added", {"item": {"id": item_id, "type": "message", "role": "assistant", "content": []}})
+                send_event("response.content_part.added", {"part": {"type": "text", "text": ""}})
+
+                if not OPENROUTER_API_KEY:
+                    send_delta("Error: OPENROUTER_API_KEY is not set in your .env file.")
+                else:
+                    client = OpenAI(
+                        base_url="https://openrouter.ai/api/v1",
+                        api_key=OPENROUTER_API_KEY,
+                        default_headers={
+                            "HTTP-Referer": "https://github.com/microsoft-foundry/workshop",
+                            "X-Title": "AI Agents Workshop",
+                        },
+                    )
+                    processed_input = preprocess_input(str(prompt))
+
+                    # Step 1: Resume Parser
+                    send_delta("Running multi-agent analysis on OpenRouter...\n\n[Step 1/4] Parsing candidate profile...\n")
+                    parsed_resume = execute_step(client, RESUME_PARSER_INSTRUCTIONS, processed_input)
+
+                    # Step 2: Job Description Agent
+                    send_delta("[Step 2/4] Analyzing job requirements...\n")
+                    jd_analysis = execute_step(client, JOB_DESCRIPTION_INSTRUCTIONS, parsed_resume)
+
+                    # Step 3: Matching Agent
+                    send_delta("[Step 3/4] Evaluating fit score and skills gap...\n")
+                    matching_report = execute_step(client, MATCHING_AGENT_INSTRUCTIONS, jd_analysis)
+
+                    # Step 4: Gap Analyzer
+                    send_delta("[Step 4/4] Building personalized learning roadmap with resources...\n\n")
+                    final_roadmap = execute_step(client, GAP_ANALYZER_INSTRUCTIONS, matching_report, use_tools=True)
+
+                    full_output = f"=== MATCHING REPORT ===\n{matching_report}\n\n=== UPSKILLING ROADMAP ===\n{final_roadmap}"
+                    send_delta(f"\n{full_output}")
+
+                send_event("response.output_item.done", {"item": {"id": item_id, "type": "message", "role": "assistant", "content": [{"type": "text", "text": full_output if OPENROUTER_API_KEY else "Error"}]}})
+                send_event("response.done", {"response": {"id": resp_id, "conversation_id": conv_id, "status": "completed", "output": [{"id": item_id, "type": "message", "role": "assistant", "content": [{"type": "text", "text": full_output if OPENROUTER_API_KEY else "Error"}]}]}})
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+
+            except Exception as e:
+                logger.error(f"Error handling request: {e}")
+                try:
+                    self.wfile.write(f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n".encode("utf-8"))
+                    self.wfile.write(b"data: [DONE]\n\n")
+                    self.wfile.flush()
+                except Exception:
+                    pass
 
         def log_message(self, format, *args):
             pass
@@ -257,7 +339,7 @@ def start_server(host="127.0.0.1", port=8088):
     print("=" * 70)
     print(f"OpenRouter Multi-Agent Server running on http://{host}:{port}")
     print(f"Model: {OPENROUTER_MODEL}")
-    print("Compatible with VS Code Command: Foundry Toolkit: Open Agent Inspector")
+    print("Features: PDF Resume Extraction + Agent Inspector Streaming")
     print("=" * 70 + "\n")
 
     httpd = HTTPServer((host, port), Handler)
@@ -273,7 +355,14 @@ if __name__ == "__main__":
 Resume: Jane Doe, 5 years Python backend developer with AWS and PostgreSQL.
 Job Description: Senior AI Cloud Engineer, requires Kubernetes, Terraform, Azure AI Foundry, LLM fine-tuning.
 """
-        print("\n--- CLI Test Output ---\n")
-        print(run_career_copilot(sample))
+        client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=OPENROUTER_API_KEY,
+        )
+        r1 = execute_step(client, RESUME_PARSER_INSTRUCTIONS, preprocess_input(sample))
+        r2 = execute_step(client, JOB_DESCRIPTION_INSTRUCTIONS, r1)
+        r3 = execute_step(client, MATCHING_AGENT_INSTRUCTIONS, r2)
+        r4 = execute_step(client, GAP_ANALYZER_INSTRUCTIONS, r3, use_tools=True)
+        print(f"=== MATCHING REPORT ===\n{r3}\n\n=== UPSKILLING ROADMAP ===\n{r4}")
     else:
         start_server()
