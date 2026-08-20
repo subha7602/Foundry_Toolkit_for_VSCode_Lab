@@ -62,7 +62,47 @@
     border-radius: 999px;
     margin-bottom: 12px;
   }
-  h1 { margin: 0 0 4px; font-size: 24px; }
+  h1.lab-title {
+    margin: 0 0 10px;
+    font-size: 36px;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    position: relative;
+    display: inline-block;
+    animation: fadeInUp 0.6s ease-out;
+  }
+  h1.lab-title::after {
+    content: "";
+    position: absolute;
+    left: 2px;
+    bottom: -6px;
+    height: 4px;
+    width: 56px;
+    border-radius: 3px;
+    background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 30%, transparent), var(--accent));
+    background-size: 200% 100%;
+    animation: shimmer 2.8s ease-in-out infinite;
+  }
+  .badge-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+    animation: fadeInUp 0.5s ease-out;
+  }
+  .badge-row .badge { margin-bottom: 0; }
+  .app-title { margin: 0 0 4px; font-size: 19px; font-weight: 600; color: var(--text); }
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes shimmer {
+    0% { background-position: 0% 50%; }
+    100% { background-position: 200% 50%; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .badge-row, h1.lab-title, h1.lab-title::after { animation: none; }
+  }
   .subtitle { margin: 0 0 24px; color: var(--muted); font-size: 14px; }
   label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
   textarea {
@@ -141,7 +181,6 @@
   }
   .copy-btn:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
   #output {
-    white-space: pre-wrap;
     word-wrap: break-word;
     font-size: 14px;
     line-height: 1.6;
@@ -151,7 +190,50 @@
     border-radius: 10px;
     min-height: 60px;
   }
-  #output.error { color: var(--error); }
+  #output.error { color: var(--error); white-space: pre-wrap; }
+  #output p { margin: 0 0 10px; }
+  #output p:last-child { margin-bottom: 0; }
+  #output h1, #output h2, #output h3, #output h4, #output h5, #output h6 {
+    margin: 14px 0 8px;
+    line-height: 1.3;
+  }
+  #output h1:first-child, #output h2:first-child, #output h3:first-child { margin-top: 0; }
+  #output h3 { font-size: 15px; }
+  #output h4 { font-size: 14px; }
+  #output ul, #output ol { margin: 0 0 10px; padding-left: 22px; }
+  #output li { margin-bottom: 4px; }
+  #output strong { font-weight: 700; }
+  #output code {
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 13px;
+  }
+  #output .gap-card {
+    margin: 0 0 14px;
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--card-bg);
+  }
+  #output .gap-card:last-child { margin-bottom: 0; }
+  #output .gap-card-title {
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--accent);
+    margin-bottom: 8px;
+  }
+  #output .gap-card p:first-child,
+  #output .gap-card .kv-row:first-of-type { margin-top: 0; }
+  #output .kv-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 3px 0;
+  }
+  #output .kv-key { font-weight: 700; flex-shrink: 0; }
+  #output .kv-key::after { content: ":"; }
+  #output .kv-val { color: var(--text); }
   .hint { margin-top: 10px; font-size: 12px; color: var(--muted); }
   .status-row {
     display: flex;
@@ -201,8 +283,11 @@
 </head>
 <body>
   <div class="card">
-    <span class="badge">executive-summary-agent</span>
-    <h1>Explain Like I'm an Executive</h1>
+    <h1 class="lab-title">Single Agent</h1>
+    <div class="badge-row">
+      <span class="badge">executive-summary-agent</span>
+    </div>
+    <h2 class="app-title">Explain Like I'm an Executive</h2>
     <p class="subtitle">Paste a technical incident, log, or status update — get back a short, non-technical executive summary.</p>
 
     <div class="status-row">
@@ -244,6 +329,69 @@
   const statusDot = document.getElementById("statusDot");
   const statusText = document.getElementById("statusText");
   const providerChip = document.getElementById("providerChip");
+  let rawOutput = "";
+
+  function escapeHtml(str) {
+    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function renderInline(text) {
+    // auto-bold a leading "Label: " fragment even when the model didn't emit markdown
+    let out = text.replace(/^([A-Za-z][A-Za-z0-9 /&()'-]{1,40}):\s+(?=\S)/, (_, label) => `**${label}:** `);
+    return out
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/(?<!\*)\*([^*]+?)\*(?!\*)/g, "<em>$1</em>")
+      .replace(/`(.+?)`/g, "<code>$1</code>");
+  }
+
+  function renderMarkdown(md) {
+    const lines = escapeHtml(md).split("\n");
+    let html = "";
+    let listType = null;
+    let inCard = false;
+    const closeList = () => {
+      if (listType) { html += `</${listType}>`; listType = null; }
+    };
+    const closeCard = () => {
+      closeList();
+      if (inCard) { html += "</div>"; inCard = false; }
+    };
+
+    for (const line of lines) {
+      const cardTitle = line.match(/^#{0,6}\s*(?:Gap\s+)?Card\s*\d+\s*[:.]?\s*(.*)$/i);
+      const heading = !cardTitle && line.match(/^(#{1,6})\s+(.*)$/);
+      const ulItem = line.match(/^\s*[-*]\s+(.*)$/);
+      const olItem = line.match(/^\s*\d+[.)]\s+(.*)$/);
+      const kv = !ulItem && !olItem && line.match(/^([A-Za-z][A-Za-z0-9 /&()'-]{1,40}):\s*(.*)$/);
+
+      if (cardTitle) {
+        closeCard();
+        html += `<div class="gap-card"><div class="gap-card-title">${renderInline(cardTitle[1] || "Details")}</div>`;
+        inCard = true;
+      } else if (heading) {
+        closeCard();
+        const level = Math.min(heading[1].length + 1, 6);
+        html += `<h${level}>${renderInline(heading[2])}</h${level}>`;
+      } else if (ulItem) {
+        if (listType !== "ul") { closeList(); html += "<ul>"; listType = "ul"; }
+        html += `<li>${renderInline(ulItem[1])}</li>`;
+      } else if (olItem) {
+        if (listType !== "ol") { closeList(); html += "<ol>"; listType = "ol"; }
+        html += `<li>${renderInline(olItem[1])}</li>`;
+      } else if (kv) {
+        closeList();
+        const value = kv[2].trim();
+        html += `<div class="kv-row"><span class="kv-key">${renderInline(kv[1])}</span>${value ? `<span class="kv-val">${renderInline(value)}</span>` : ""}</div>`;
+      } else if (line.trim() === "") {
+        closeList();
+      } else {
+        closeCard();
+        html += `<p>${renderInline(line)}</p>`;
+      }
+    }
+    closeCard();
+    return html;
+  }
 
   async function checkServer() {
     try {
@@ -291,7 +439,8 @@
     setLoading(true);
     outputWrap.classList.add("visible");
     output.classList.remove("error");
-    output.textContent = "";
+    output.innerHTML = "";
+    rawOutput = "";
 
     try {
       const res = await fetch(API_URL, {
@@ -327,10 +476,12 @@
             try {
               const evt = JSON.parse(payload);
               if (evt.type === "response.text.delta" && typeof evt.delta === "string") {
-                output.textContent += evt.delta;
+                rawOutput += evt.delta;
+                output.innerHTML = renderMarkdown(rawOutput);
               } else if (evt.type === "error") {
                 output.classList.add("error");
-                output.textContent = evt.error || "Something went wrong.";
+                rawOutput = evt.error || "Something went wrong.";
+                output.textContent = rawOutput;
               }
             } catch {
               // ignore malformed chunk
@@ -344,16 +495,18 @@
           data.response ??
           data.output?.[0]?.content?.[0]?.text ??
           "";
+        rawOutput = data.status === "error" || !text ? (data.error || text || "No response text returned.") : text;
         if (data.status === "error" || !text) {
           output.classList.add("error");
-          output.textContent = data.error || text || "No response text returned.";
+          output.textContent = rawOutput;
         } else {
-          output.textContent = text;
+          output.innerHTML = renderMarkdown(rawOutput);
         }
       }
     } catch (err) {
       output.classList.add("error");
-      output.textContent = `Error: ${err.message}. Make sure one of the agent runners is started (e.g. python gemini_main.py).`;
+      rawOutput = `Error: ${err.message}. Make sure one of the agent runners is started (e.g. python gemini_main.py).`;
+      output.textContent = rawOutput;
     } finally {
       setLoading(false);
     }
@@ -363,7 +516,8 @@
   clearBtn.addEventListener("click", () => {
     input.value = "";
     outputWrap.classList.remove("visible");
-    output.textContent = "";
+    output.innerHTML = "";
+    rawOutput = "";
   });
   input.addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -372,8 +526,8 @@
     }
   });
   copyBtn.addEventListener("click", async () => {
-    if (!output.textContent) return;
-    await navigator.clipboard.writeText(output.textContent);
+    if (!rawOutput) return;
+    await navigator.clipboard.writeText(rawOutput);
     const original = copyBtn.textContent;
     copyBtn.textContent = "Copied!";
     setTimeout(() => (copyBtn.textContent = original), 1200);
