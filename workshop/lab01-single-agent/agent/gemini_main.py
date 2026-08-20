@@ -128,7 +128,7 @@ def start_server(host="127.0.0.1", port=8088):
             self.end_headers()
 
         def do_GET(self):
-            self._send_json({"status": "healthy", "agent": "ExecutiveSummaryAgent", "model": GEMINI_MODEL})
+            self._send_json({"status": "healthy", "agent": "ExecutiveSummaryAgent", "provider": "Gemini", "model": GEMINI_MODEL})
 
         def do_POST(self):
             try:
@@ -155,7 +155,6 @@ def start_server(host="127.0.0.1", port=8088):
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream; charset=utf-8")
                 self.send_header("Cache-Control", "no-cache")
-                self.send_header("Connection", "keep-alive")
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.send_header("Access-Control-Allow-Headers", "*")
                 self.end_headers()

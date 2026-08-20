@@ -153,6 +153,50 @@
   }
   #output.error { color: var(--error); }
   .hint { margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .status-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  .model-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 5px 12px 5px 10px;
+  }
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--muted);
+    flex-shrink: 0;
+  }
+  .status-dot.online { background: #22c55e; }
+  .status-dot.offline { background: var(--error); }
+  .status-dot.checking { background: #f59e0b; }
+  .provider-chip {
+    display: none;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: #fff;
+    border-radius: 999px;
+    padding: 5px 12px;
+  }
+  .provider-chip.visible { display: inline-flex; }
+  .provider-chip.groq { background: #f97316; }
+  .provider-chip.openrouter { background: #8b5cf6; }
+  .provider-chip.ollama { background: #14b8a6; }
+  .provider-chip.gemini { background: #4285f4; }
+  .provider-chip.foundry { background: #0078d4; }
+  .provider-chip.unknown { background: var(--muted); }
 </style>
 </head>
 <body>
@@ -160,6 +204,14 @@
     <span class="badge">executive-summary-agent</span>
     <h1>Explain Like I'm an Executive</h1>
     <p class="subtitle">Paste a technical incident, log, or status update — get back a short, non-technical executive summary.</p>
+
+    <div class="status-row">
+      <span class="provider-chip" id="providerChip"></span>
+      <div class="model-status">
+        <span class="status-dot checking" id="statusDot"></span>
+        <span id="statusText">Checking server…</span>
+      </div>
+    </div>
 
     <label for="input">Technical Details</label>
     <textarea id="input" placeholder="e.g. API latency increased from 200ms to 2s after deploying v3.2 at 09:30 UTC. Rolled back to v3.1 at 10:14 UTC."></textarea>
@@ -189,6 +241,34 @@
   const outputWrap = document.getElementById("outputWrap");
   const output = document.getElementById("output");
   const copyBtn = document.getElementById("copyBtn");
+  const statusDot = document.getElementById("statusDot");
+  const statusText = document.getElementById("statusText");
+  const providerChip = document.getElementById("providerChip");
+
+  async function checkServer() {
+    try {
+      const res = await fetch(API_URL, { method: "GET" });
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      const data = await res.json();
+      statusDot.className = "status-dot online";
+      statusText.textContent = `Connected · model: ${data.model || "unknown"}`;
+
+      const provider = data.provider || null;
+      if (provider) {
+        const key = provider.toLowerCase();
+        providerChip.className = `provider-chip visible ${["groq", "openrouter", "ollama", "gemini", "foundry"].includes(key) ? key : "unknown"}`;
+        providerChip.textContent = provider;
+      } else {
+        providerChip.className = "provider-chip";
+      }
+    } catch {
+      statusDot.className = "status-dot offline";
+      statusText.textContent = "Server offline — start an agent runner on :8088";
+      providerChip.className = "provider-chip";
+    }
+  }
+  checkServer();
+  setInterval(checkServer, 15000);
 
   function setLoading(isLoading) {
     submitBtn.disabled = isLoading;

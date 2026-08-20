@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("ollama-multi-agent")
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:latest")
 
 RESUME_PARSER_INSTRUCTIONS = """\
 You are the Resume Parser and Content Router.
@@ -290,7 +290,7 @@ def start_server(host="127.0.0.1", port=8088):
             self.end_headers()
 
         def do_GET(self):
-            self._send_json({"status": "healthy", "agent": "PersonalCareerCopilot", "model": OLLAMA_MODEL})
+            self._send_json({"status": "healthy", "agent": "PersonalCareerCopilot", "provider": "Ollama", "model": OLLAMA_MODEL})
 
         def do_POST(self):
             try:
@@ -317,7 +317,6 @@ def start_server(host="127.0.0.1", port=8088):
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream; charset=utf-8")
                 self.send_header("Cache-Control", "no-cache")
-                self.send_header("Connection", "keep-alive")
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.send_header("Access-Control-Allow-Headers", "*")
                 self.end_headers()
