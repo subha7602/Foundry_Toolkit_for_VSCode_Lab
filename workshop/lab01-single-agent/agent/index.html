@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Explain Like I'm an Executive</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --card-bg: #ffffff;
+    --border: #e2e4e9;
+    --text: #1a1d23;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --accent-fg: #ffffff;
+    --error: #dc2626;
+    --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115;
+      --card-bg: #171a21;
+      --border: #2a2e37;
+      --text: #e7e9ee;
+      --muted: #9096a3;
+      --accent: #5b8cff;
+      --accent-fg: #0f1115;
+      --error: #f87171;
+      --shadow: 0 1px 3px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.35);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 16px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .card {
+    width: 100%;
+    max-width: 720px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+    padding: 32px;
+  }
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    padding: 4px 10px;
+    border-radius: 999px;
+    margin-bottom: 12px;
+  }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  .subtitle { margin: 0 0 24px; color: var(--muted); font-size: 14px; }
+  label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  textarea {
+    width: 100%;
+    min-height: 160px;
+    resize: vertical;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+    transition: box-shadow 0.15s, border-color 0.15s;
+  }
+  textarea::placeholder { color: var(--muted); }
+  textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+  textarea.flash {
+    border-color: var(--error);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--error) 18%, transparent);
+  }
+  .actions { display: flex; gap: 10px; margin-top: 16px; }
+  button {
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    border-radius: 10px;
+    padding: 10px 18px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: opacity 0.15s;
+  }
+  button:disabled { cursor: not-allowed; opacity: 0.7; }
+  .primary { background: var(--accent); color: var(--accent-fg); }
+  .primary:hover:not(:disabled) { opacity: 0.9; }
+  .secondary { background: transparent; color: var(--text); border-color: var(--border); }
+  .secondary:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+  .spinner {
+    display: none;
+    width: 14px;
+    height: 14px;
+    border: 2px solid color-mix(in srgb, var(--accent-fg) 40%, transparent);
+    border-top-color: var(--accent-fg);
+    border-radius: 50%;
+    margin-right: 8px;
+    animation: spin 0.7s linear infinite;
+    vertical-align: -2px;
+  }
+  .primary.loading .spinner { display: inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #outputWrap {
+    display: none;
+    margin-top: 24px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+  }
+  #outputWrap.visible { display: block; }
+  .output-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .output-label { font-size: 13px; font-weight: 600; }
+  .copy-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 8px;
+  }
+  .copy-btn:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+  #output {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-size: 14px;
+    line-height: 1.6;
+    padding: 14px 16px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    min-height: 60px;
+  }
+  #output.error { color: var(--error); }
+  .hint { margin-top: 10px; font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+  <div class="card">
+    <span class="badge">executive-summary-agent</span>
+    <h1>Explain Like I'm an Executive</h1>
+    <p class="subtitle">Paste a technical incident, log, or status update — get back a short, non-technical executive summary.</p>
+
+    <label for="input">Technical Details</label>
+    <textarea id="input" placeholder="e.g. API latency increased from 200ms to 2s after deploying v3.2 at 09:30 UTC. Rolled back to v3.1 at 10:14 UTC."></textarea>
+
+    <div class="actions">
+      <button id="submitBtn" class="primary">
+        <span class="spinner"></span><span class="btn-label">Summarize</span>
+      </button>
+      <button id="clearBtn" class="secondary">Clear</button>
+    </div>
+    <p class="hint">⌘/Ctrl + Enter to submit · requires one of the agent runners (<code>groq_main.py</code>, <code>openrouter_main.py</code>, <code>ollama_main.py</code>, <code>gemini_main.py</code>) running on :8088</p>
+
+    <div id="outputWrap">
+      <div class="output-header">
+        <span class="output-label">Executive Summary</span>
+        <button class="copy-btn" id="copyBtn">Copy</button>
+      </div>
+      <div id="output"></div>
+    </div>
+  </div>
+
+<script>
+  const API_URL = "http://127.0.0.1:8088/";
+  const input = document.getElementById("input");
+  const submitBtn = document.getElementById("submitBtn");
+  const clearBtn = document.getElementById("clearBtn");
+  const outputWrap = document.getElementById("outputWrap");
+  const output = document.getElementById("output");
+  const copyBtn = document.getElementById("copyBtn");
+
+  function setLoading(isLoading) {
+    submitBtn.disabled = isLoading;
+    submitBtn.classList.toggle("loading", isLoading);
+    submitBtn.querySelector(".btn-label").textContent = isLoading ? "Summarizing..." : "Summarize";
+  }
+
+  function flashInvalid() {
+    input.classList.add("flash");
+    setTimeout(() => input.classList.remove("flash"), 500);
+  }
+
+  async function submit() {
+    const text = input.value.trim();
+    if (!text) {
+      flashInvalid();
+      return;
+    }
+
+    setLoading(true);
+    outputWrap.classList.add("visible");
+    output.classList.remove("error");
+    output.textContent = "";
+
+    try {
+      const res = await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input: text }),
+      });
+
+      if (!res.ok || !res.body) {
+        throw new Error(`Server responded with ${res.status}`);
+      }
+
+      const contentType = res.headers.get("Content-Type") || "";
+
+      if (contentType.includes("text/event-stream")) {
+        // Streaming runners (ollama_main.py, gemini_main.py): consume the SSE stream.
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop();
+
+          for (const line of lines) {
+            if (!line.startsWith("data:")) continue;
+            const payload = line.slice(5).trim();
+            if (payload === "[DONE]") continue;
+            try {
+              const evt = JSON.parse(payload);
+              if (evt.type === "response.text.delta" && typeof evt.delta === "string") {
+                output.textContent += evt.delta;
+              } else if (evt.type === "error") {
+                output.classList.add("error");
+                output.textContent = evt.error || "Something went wrong.";
+              }
+            } catch {
+              // ignore malformed chunk
+            }
+          }
+        }
+      } else {
+        // Non-streaming runners (groq_main.py, openrouter_main.py): single JSON body.
+        const data = await res.json();
+        const text =
+          data.response ??
+          data.output?.[0]?.content?.[0]?.text ??
+          "";
+        if (data.status === "error" || !text) {
+          output.classList.add("error");
+          output.textContent = data.error || text || "No response text returned.";
+        } else {
+          output.textContent = text;
+        }
+      }
+    } catch (err) {
+      output.classList.add("error");
+      output.textContent = `Error: ${err.message}. Make sure one of the agent runners is started (e.g. python gemini_main.py).`;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  submitBtn.addEventListener("click", submit);
+  clearBtn.addEventListener("click", () => {
+    input.value = "";
+    outputWrap.classList.remove("visible");
+    output.textContent = "";
+  });
+  input.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      e.preventDefault();
+      submit();
+    }
+  });
+  copyBtn.addEventListener("click", async () => {
+    if (!output.textContent) return;
+    await navigator.clipboard.writeText(output.textContent);
+    const original = copyBtn.textContent;
+    copyBtn.textContent = "Copied!";
+    setTimeout(() => (copyBtn.textContent = original), 1200);
+  });
+</script>
+</body>
+</html>
